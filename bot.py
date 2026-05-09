@@ -86,6 +86,26 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update.effective_user.id):
+        return
+    try:
+        b = Broker(os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY"))
+        acc = await asyncio.get_event_loop().run_in_executor(None, b.get_account)
+        market_open = await asyncio.get_event_loop().run_in_executor(None, b.is_market_open)
+        status = "🟢 Open" if market_open else "🔴 Closed"
+        await update.message.reply_text(
+            f"📊 <b>Alpaca Account</b>\n"
+            f"Portfolio: ${acc['portfolio_value']:,.2f}\n"
+            f"Cash: ${acc['cash']:,.2f}\n"
+            f"Buying Power: ${acc['buying_power']:,.2f}\n"
+            f"Market: {status}",
+            parse_mode="HTML",
+        )
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error fetching account: {e}")
+
+
 async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update.effective_user.id):
         return
@@ -362,6 +382,7 @@ def main():
 
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("account", cmd_account))
     app.add_handler(CommandHandler("budget", cmd_budget))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
