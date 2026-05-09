@@ -249,7 +249,42 @@ def build_history_report(history: dict) -> str:
     return "\n".join(lines)
 
 
+def seed_from_batch(batch_path: str = "kevin_history.json"):
+    """One-time: seed rolling history from batch analysis JSON."""
+    kh_path = Path(batch_path)
+    if not kh_path.exists():
+        print(f"{batch_path} not found")
+        return
+    kh = json.loads(kh_path.read_text())
+    history = {"entries": []}
+    today = date.today()
+    for td in kh.get("tickers", []):
+        sym = td["ticker"]
+        bull = td["bullish"]
+        bear = td["bearish"]
+        total = td["mention_count"]
+        sentiment = "bullish" if bull >= bear else "bearish"
+        for i in range(min(total, 30)):
+            day = (today - timedelta(days=i)).isoformat()
+            entry = next((e for e in history["entries"] if e["date"] == day), None)
+            if not entry:
+                entry = {"date": day, "market_sentiment": "neutral", "tickers": []}
+                history["entries"].append(entry)
+            entry["tickers"].append({
+                "ticker": sym,
+                "sentiment": sentiment,
+                "conviction": "medium",
+                "green_flags": 0,
+                "red_flags": 0,
+            })
+    history["entries"] = sorted(history["entries"], key=lambda e: e["date"])
+    save_history(history)
+    print(f"Seeded {len(kh.get('tickers', []))} tickers across last 30 days")
+
+
 if __name__ == "__main__":
     import sys
     if "--create-gist" in sys.argv:
         create_gist()
+    elif "--seed" in sys.argv:
+        seed_from_batch()
