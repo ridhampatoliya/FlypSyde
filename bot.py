@@ -17,6 +17,7 @@ from telegram.ext import (
 
 from agent import analyze_morning_data
 from broker import Broker
+from earnings import earnings_warning
 from history import load_history, save_history, add_today, build_context_summary, get_ticker_history, build_history_report
 from spend_tracker import get_remaining, get_today_spent, record_spend, DAILY_LIMIT
 import config
@@ -249,6 +250,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         history = context.user_data.get("history", load_history())
 
+        # Fetch earnings warnings in parallel
+        loop = asyncio.get_event_loop()
+        earnings_warnings = await asyncio.gather(*[
+            loop.run_in_executor(None, earnings_warning, t["ticker"])
+            for t in trades
+        ])
+        earnings_map = {t["ticker"]: w for t, w in zip(trades, earnings_warnings)}
+
         for trade in trades:
             ticker = trade["ticker"]
             conviction = trade["conviction"]
@@ -276,6 +285,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{history_badge}\n"
                 f"<i>{trade['reasoning']}</i>"
             )
+            if earnings_map.get(ticker):
+                msg += f"\n{earnings_map[ticker]}"
             if trade.get("notes"):
                 msg += f"\n⚠️ <i>{trade['notes']}</i>"
 
