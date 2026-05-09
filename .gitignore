@@ -6,3 +6,11 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
+kevin*
+*.rtf
+sources_comparison.json
+transcripts/
+Data/
+Stocks/
+daily_spend.json
+rolling_history.json

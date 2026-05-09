@@ -17,6 +17,8 @@ from telegram.ext import (
 
 from agent import analyze_morning_data
 from broker import Broker
+from history import load_history, save_history, add_today, build_context_summary, get_ticker_history
+from spend_tracker import get_remaining, get_today_spent, record_spend, DAILY_LIMIT
 import config
 
 load_dotenv()
@@ -25,6 +27,33 @@ logging.basicConfig(format="%(asctime)s %(levelname)s %(message)s", level=loggin
 ALLOWED_USER_ID = int(os.getenv("TELEGRAM_USER_ID") or "0")
 CONVICTION_ICON = {"high": "🔥", "medium": "⚡", "low": "💧"}
 SENTIMENT_ICON = {"bullish": "🟢", "neutral": "🟡", "bearish": "🔴"}
+
+
+def select_trades(trades: list, budget: float) -> list:
+    """Pick subset of trades that maximizes spend without exceeding budget.
+    Prefers higher conviction on ties (sort ensures high-conviction items placed first in DP)."""
+    order = {"high": 0, "medium": 1, "low": 2}
+    sorted_trades = sorted(trades, key=lambda t: order.get(t["conviction"], 3))
+    costs = [int(config.POSITION_SIZES.get(t["conviction"], 100)) for t in sorted_trades]
+    n = len(sorted_trades)
+    cap = int(budget)
+
+    dp = [[0] * (cap + 1) for _ in range(n + 1)]
+    for i in range(1, n + 1):
+        c = costs[i - 1]
+        for j in range(cap + 1):
+            dp[i][j] = dp[i - 1][j]
+            if j >= c:
+                dp[i][j] = max(dp[i][j], dp[i - 1][j - c] + c)
+
+    selected = []
+    j = cap
+    for i in range(n, 0, -1):
+        if dp[i][j] != dp[i - 1][j]:
+            selected.append(sorted_trades[i - 1])
+            j -= costs[i - 1]
+
+    return selected
 
 
 class TelegramImage:
@@ -53,6 +82,19 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Your Telegram user ID: <code>{uid}</code>\n"
         f"Add <code>TELEGRAM_USER_ID={uid}</code> to your .env to lock the bot to only you.\n\n"
         "Send your morning notes (text and/or screenshots), then tap <b>Analyze</b>.",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_budget(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update.effective_user.id):
+        return
+    spent = get_today_spent()
+    remaining = get_remaining()
+    await update.message.reply_text(
+        f"💰 <b>Daily Budget</b>\n"
+        f"Spent: ${spent:.0f} / ${DAILY_LIMIT:.0f}\n"
+        f"Remaining: ${remaining:.0f}",
         parse_mode="HTML",
     )
 
@@ -104,12 +146,24 @@ async def run_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE) -> di
         await f.download_to_memory(buf)
         images.append(TelegramImage(buf.getvalue()))
 
+    history = load_history()
+    history_context = build_context_summary(history)
+
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(analyze_morning_data, text, images))
+    result = await loop.run_in_executor(
+        None, partial(analyze_morning_data, text, images, history_context)
+    )
+
+    trades = result.get("trades", [])
+    skipped = result.get("skipped", [])
+    sentiment = result.get("market_sentiment", "neutral")
+    updated = add_today(history, trades, skipped, sentiment)
+    save_history(updated)
 
     context.user_data["text"] = ""
     context.user_data["photos"] = []
     context.user_data["analysis"] = result
+    context.user_data["history"] = updated
     return result
 
 
@@ -144,18 +198,28 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         sentiment = result.get("market_sentiment", "neutral")
         icon = SENTIMENT_ICON.get(sentiment, "🟡")
         market_ctx = result.get("market_context", "")
-        trades = result.get("trades", [])
+        all_trades = result.get("trades", [])
         skipped = result.get("skipped", [])
+
+        remaining = get_remaining()
+        trades = select_trades(all_trades, remaining)
+        # Trades excluded by budget go to skipped display
+        excluded = [t for t in all_trades if t not in trades]
+
         total = sum(config.POSITION_SIZES.get(t["conviction"], 0) for t in trades)
+        spent = get_today_spent()
 
         await query.edit_message_text(
-            f"{icon} <b>Market: {sentiment.upper()}</b>\n{market_ctx}"
-            + (f"\n\n<b>{len(trades)} trade(s) — ${total:.0f} total</b>" if trades else "\n\nNo actionable trades."),
+            f"{icon} <b>Market: {sentiment.upper()}</b>\n{market_ctx}\n\n"
+            f"💰 Budget: ${spent:.0f} spent · ${remaining:.0f} remaining\n"
+            + (f"<b>{len(trades)} trade(s) — ${total:.0f} of ${remaining:.0f}</b>" if trades else "<b>No actionable trades.</b>"),
             parse_mode="HTML",
         )
 
         if not trades:
             return
+
+        history = context.user_data.get("history", load_history())
 
         for trade in trades:
             ticker = trade["ticker"]
@@ -164,11 +228,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ci = CONVICTION_ICON.get(conviction, "")
             name = trade.get("company_name", "")
 
+            th = get_ticker_history(history, ticker)
+            bull = th["bullish_days"]
+            total_h = th["total_days"]
+            if total_h == 0:
+                history_badge = "📅 First mention today"
+            elif bull == total_h:
+                history_badge = f"📈 Bullish {bull}/{total_h} days ↑"
+            elif bull == 0:
+                history_badge = f"📉 Bearish all {total_h} days ↓"
+            else:
+                history_badge = f"📊 Bullish {bull}/{total_h} days"
+
             msg = (
                 f"{ci} <b>{ticker}</b>" + (f" — {name}" if name else "") + "\n"
                 f"<b>{conviction.upper()}</b> — ${notional:.0f}  |  "
                 f"TP +{trade['take_profit_pct']:.1f}%  |  SL -{trade['stop_loss_pct']:.1f}%\n"
                 f"🟢 {trade.get('green_flags', '?')} green  🔴 {trade.get('red_flags', '?')} red\n"
+                f"{history_badge}\n"
                 f"<i>{trade['reasoning']}</i>"
             )
             if trade.get("notes"):
@@ -185,9 +262,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup(keyboard),
             )
 
-        if skipped:
-            lines = "\n".join(f"• <b>{s.get('ticker','?')}</b> — {s.get('reason','')}" for s in skipped)
-            await context.bot.send_message(chat_id=chat_id, text=f"<b>Skipped:</b>\n{lines}", parse_mode="HTML")
+        skip_lines = [f"• <b>{s.get('ticker','?')}</b> — {s.get('reason','')}" for s in skipped]
+        skip_lines += [f"• <b>{t['ticker']}</b> — over daily budget" for t in excluded]
+        if skip_lines:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"<b>Skipped:</b>\n" + "\n".join(skip_lines),
+                parse_mode="HTML",
+            )
 
     # ── Execute trade ──────────────────────────────────────────────────────────
     elif data.startswith("execute_"):
@@ -200,35 +282,69 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, f"Trade data for {ticker} not found.")
             return
 
+        notional = config.POSITION_SIZES.get(trade["conviction"], 100)
+        remaining = get_remaining()
+        if notional > remaining:
+            await query.edit_message_reply_markup(None)
+            await context.bot.send_message(
+                chat_id,
+                f"🚫 <b>{ticker}</b> blocked — ${notional:.0f} exceeds remaining budget ${remaining:.0f}",
+                parse_mode="HTML",
+            )
+            return
+
         await query.edit_message_reply_markup(None)
-        status = await context.bot.send_message(chat_id, f"⏳ Placing order for {ticker}...")
+
+        # Check market hours before placing — fractional orders need to fill immediately for OCO
+        b = Broker(os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY"))
+        market_open = await asyncio.get_event_loop().run_in_executor(None, b.is_market_open)
+        if not market_open:
+            await context.bot.send_message(
+                chat_id,
+                f"🔴 <b>Market closed</b> — come back during market hours (9:30am–4pm ET) to execute <b>{ticker}</b>.",
+                parse_mode="HTML",
+            )
+            return
+
+        price = await asyncio.get_event_loop().run_in_executor(None, b.get_current_price, ticker)
+        is_fractional = int(notional / price) < 1 if price > 0 else False
+        wait_msg = "⏳ Placing fractional order — awaiting fill & OCO setup (up to 30s)..." if is_fractional else "⏳ Placing order..."
+        status = await context.bot.send_message(chat_id, wait_msg)
 
         try:
-            b = Broker(os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY"))
-            notional = config.POSITION_SIZES.get(trade["conviction"], 100)
-            order, error = b.place_bracket_order(
-                ticker, notional, trade["take_profit_pct"], trade["stop_loss_pct"]
+            order, error = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: b.place_order(ticker, notional, trade["take_profit_pct"], trade["stop_loss_pct"])
             )
         except Exception as e:
             await status.edit_text(f"❌ <b>{ticker}</b>: {e}", parse_mode="HTML")
             return
 
-        if error:
+        if order is None:
             await status.edit_text(f"❌ <b>{ticker}</b>: {error}", parse_mode="HTML")
-        elif order.get("fractional"):
-            await status.edit_text(
-                f"✅ <b>{ticker}</b>: {order['shares']:.4f} shares @ ~${order['entry_price']:.2f}\n"
-                f"⚠️ Fractional — set TP ${order['take_profit_price']:.2f} / SL ${order['stop_loss_price']:.2f} manually\n"
-                f"<code>{order['id']}</code>",
-                parse_mode="HTML",
-            )
-        else:
-            await status.edit_text(
-                f"✅ <b>{ticker}</b>: {order['shares']} shares @ ~${order['entry_price']:.2f}\n"
-                f"TP ${order['take_profit_price']:.2f}  |  SL ${order['stop_loss_price']:.2f}\n"
-                f"<code>{order['id']}</code>",
-                parse_mode="HTML",
-            )
+            return
+
+        record_spend(notional)
+        new_remaining = get_remaining()
+
+        shares_str = f"{order['shares']:.4f}" if order["fractional"] else str(order["shares"])
+        oco_line = ""
+        if order["fractional"]:
+            if order["oco_protected"]:
+                oco_line = f"\n🛡 OCO set — TP/SL auto-managed  <code>{order['oco_id']}</code>"
+            else:
+                oco_line = f"\n⚠️ OCO failed — set TP ${order['take_profit_price']:.2f} / SL ${order['stop_loss_price']:.2f} manually"
+
+        base_msg = (
+            f"✅ <b>{ticker}</b>: {shares_str} shares @ ~${order['entry_price']:.2f}\n"
+            f"TP ${order['take_profit_price']:.2f}  |  SL ${order['stop_loss_price']:.2f}"
+            f"{oco_line}\n"
+            f"<code>{order['id']}</code>\n"
+            f"💰 ${new_remaining:.0f} remaining today"
+        )
+        if error:
+            base_msg += f"\n⚠️ {error}"
+
+        await status.edit_text(base_msg, parse_mode="HTML")
 
     # ── Skip trade ─────────────────────────────────────────────────────────────
     elif data.startswith("skip_"):
@@ -246,6 +362,7 @@ def main():
 
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("budget", cmd_budget))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))

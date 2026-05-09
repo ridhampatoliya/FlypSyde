@@ -1,8 +1,13 @@
+import time
+
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest
+
+POLL_INTERVAL = 3   # seconds between fill checks
+POLL_TIMEOUT  = 30  # max seconds to wait for fill
 
 
 class Broker:
@@ -30,7 +35,20 @@ class Broker:
             return (ask + bid) / 2
         return ask or bid
 
-    def place_bracket_order(
+    def _poll_for_fill(self, order_id: str) -> tuple[float | None, float | None]:
+        """Poll until order fills. Returns (filled_qty, filled_avg_price) or (None, None)."""
+        for _ in range(POLL_TIMEOUT // POLL_INTERVAL):
+            time.sleep(POLL_INTERVAL)
+            o = self.trading.get_order_by_id(order_id)
+            status = str(o.status)
+            if status in ("filled", "partially_filled"):
+                qty = float(o.filled_qty or 0)
+                price = float(o.filled_avg_price or 0)
+                if qty > 0 and price > 0:
+                    return qty, price
+        return None, None
+
+    def place_order(
         self,
         symbol: str,
         notional: float,
@@ -45,9 +63,10 @@ class Broker:
             whole_shares = int(notional / price)
             frac_shares = round(notional / price, 9)
 
-            take_profit_price = round(price * (1 + take_profit_pct / 100), 2)
-            stop_loss_price = round(price * (1 - stop_loss_pct / 100), 2)
+            tp_price = round(price * (1 + take_profit_pct / 100), 2)
+            sl_price = round(price * (1 - stop_loss_pct / 100), 2)
 
+            # ── Whole shares: bracket order (instant, no polling needed) ──────────
             if whole_shares >= 1:
                 order = self.trading.submit_order(
                     MarketOrderRequest(
@@ -56,39 +75,87 @@ class Broker:
                         side=OrderSide.BUY,
                         time_in_force=TimeInForce.GTC,
                         order_class=OrderClass.BRACKET,
-                        take_profit=TakeProfitRequest(limit_price=take_profit_price),
-                        stop_loss=StopLossRequest(stop_price=stop_loss_price),
+                        take_profit=TakeProfitRequest(limit_price=tp_price),
+                        stop_loss=StopLossRequest(stop_price=sl_price),
                     )
                 )
                 return {
                     "id": str(order.id),
+                    "oco_id": None,
                     "symbol": symbol,
                     "shares": whole_shares,
                     "entry_price": price,
-                    "take_profit_price": take_profit_price,
-                    "stop_loss_price": stop_loss_price,
-                    "actual_notional": whole_shares * price,
+                    "take_profit_price": tp_price,
+                    "stop_loss_price": sl_price,
                     "fractional": False,
+                    "oco_protected": True,
                 }, None
-            else:
-                order = self.trading.submit_order(
-                    MarketOrderRequest(
-                        symbol=symbol,
-                        qty=frac_shares,
-                        side=OrderSide.BUY,
-                        time_in_force=TimeInForce.DAY,
-                    )
+
+            # ── Fractional: market buy → poll fill → OCO exit ─────────────────────
+            buy_order = self.trading.submit_order(
+                MarketOrderRequest(
+                    symbol=symbol,
+                    qty=frac_shares,
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.DAY,
                 )
+            )
+
+            filled_qty, filled_price = self._poll_for_fill(str(buy_order.id))
+
+            # Fill timed out — position open but unprotected
+            if filled_qty is None:
                 return {
-                    "id": str(order.id),
+                    "id": str(buy_order.id),
+                    "oco_id": None,
                     "symbol": symbol,
                     "shares": frac_shares,
                     "entry_price": price,
-                    "take_profit_price": take_profit_price,
-                    "stop_loss_price": stop_loss_price,
-                    "actual_notional": notional,
+                    "take_profit_price": tp_price,
+                    "stop_loss_price": sl_price,
                     "fractional": True,
-                }, None
+                    "oco_protected": False,
+                }, f"Fill timeout after {POLL_TIMEOUT}s — set TP ${tp_price} / SL ${sl_price} manually in Alpaca"
+
+            # Recalculate TP/SL from actual fill price
+            tp_price = round(filled_price * (1 + take_profit_pct / 100), 2)
+            sl_price = round(filled_price * (1 - stop_loss_pct / 100), 2)
+
+            try:
+                oco_order = self.trading.submit_order(
+                    MarketOrderRequest(
+                        symbol=symbol,
+                        qty=filled_qty,
+                        side=OrderSide.SELL,
+                        time_in_force=TimeInForce.GTC,
+                        order_class=OrderClass.OCO,
+                        take_profit=TakeProfitRequest(limit_price=tp_price),
+                        stop_loss=StopLossRequest(stop_price=sl_price),
+                    )
+                )
+                oco_id = str(oco_order.id)
+                oco_protected = True
+                error = None
+            except Exception as e:
+                oco_id = None
+                oco_protected = False
+                error = f"Buy filled but OCO failed: {e} — set TP ${tp_price} / SL ${sl_price} manually"
+
+            return {
+                "id": str(buy_order.id),
+                "oco_id": oco_id,
+                "symbol": symbol,
+                "shares": filled_qty,
+                "entry_price": filled_price,
+                "take_profit_price": tp_price,
+                "stop_loss_price": sl_price,
+                "fractional": True,
+                "oco_protected": oco_protected,
+            }, error
 
         except Exception as e:
             return None, str(e)
+
+    # Keep old name as alias so nothing breaks if called elsewhere
+    def place_bracket_order(self, symbol, notional, take_profit_pct, stop_loss_pct):
+        return self.place_order(symbol, notional, take_profit_pct, stop_loss_pct)

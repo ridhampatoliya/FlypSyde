@@ -67,7 +67,7 @@ Return ONLY valid JSON, no other text, no markdown fences:
 }"""
 
 
-def analyze_morning_data(text: str, images: list) -> dict:
+def analyze_morning_data(text: str, images: list, history_context: str = "") -> dict:
     client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     content = []
@@ -98,6 +98,12 @@ def analyze_morning_data(text: str, images: list) -> dict:
             "trades": [],
             "skipped": [],
         }
+
+    if history_context:
+        content.append({
+            "type": "text",
+            "text": history_context,
+        })
 
     content.append({
         "type": "text",

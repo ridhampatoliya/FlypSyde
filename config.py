@@ -1,5 +1,4 @@
-TOTAL_CAPITAL = 1000.0
-CASH_RESERVE_PCT = 0.4
+DAILY_LIMIT = 1000.0
 
 # Dollar amount per conviction level
 POSITION_SIZES = {
@@ -7,10 +6,6 @@ POSITION_SIZES = {
     "medium": 150.0,
     "low":    100.0,
 }
-
-# Max total capital deployed at once (keeps $400 as cash reserve)
-MAX_TOTAL_DEPLOYED = 600.0
-MAX_POSITIONS = 3
 
 # Stop-loss % by conviction — higher conviction gets more breathing room
 STOP_LOSS_PCT = {
