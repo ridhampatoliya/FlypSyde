@@ -347,7 +347,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         price = await asyncio.get_event_loop().run_in_executor(None, b.get_current_price, ticker)
         is_fractional = int(notional / price) < 1 if price > 0 else False
-        wait_msg = "⏳ Placing fractional order — awaiting fill & OCO setup (up to 30s)..." if is_fractional else "⏳ Placing order..."
+        wait_msg = "⏳ Placing fractional order — awaiting fill & OCO setup (up to 60s)..." if is_fractional else "⏳ Placing order..."
         status = await context.bot.send_message(chat_id, wait_msg)
 
         try:
@@ -380,7 +380,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<code>{order['id']}</code>\n"
             f"💰 ${new_remaining:.0f} remaining today"
         )
-        if error:
+        # Only show error if not already covered by oco_line
+        if error and order["oco_protected"]:
             base_msg += f"\n⚠️ {error}"
 
         await status.edit_text(base_msg, parse_mode="HTML")
