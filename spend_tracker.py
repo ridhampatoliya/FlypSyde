@@ -2,8 +2,9 @@ import json
 from datetime import date
 from pathlib import Path
 
+from config import DAILY_LIMIT
+
 SPEND_FILE = Path("daily_spend.json")
-DAILY_LIMIT = 1000.0
 
 
 def _load() -> dict:

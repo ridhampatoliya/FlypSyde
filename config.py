@@ -1,10 +1,11 @@
-DAILY_LIMIT = 1000.0
+DAILY_LIMIT = 1200.0
 
-# Dollar amount per conviction level
+# Dollar amount per conviction level.
+# Sized to fit 1 whole share of most picks (NVDA ~$220, META ~$600 excluded at low conviction).
 POSITION_SIZES = {
-    "high":   200.0,
-    "medium": 150.0,
-    "low":    100.0,
+    "high":   300.0,
+    "medium": 200.0,
+    "low":    150.0,
 }
 
 # Stop-loss % by conviction — higher conviction gets more breathing room

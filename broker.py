@@ -82,78 +82,37 @@ class Broker:
                 return None, f"Could not fetch price for {symbol}"
 
             whole_shares = int(notional / price)
-            frac_shares = round(notional / price, 9)
+
+            # Alpaca does not support GTC on fractional sells — bracket orders only.
+            # If stock price > notional (0 whole shares), skip to avoid unprotected position.
+            if whole_shares < 1:
+                return None, f"{symbol} price ${price:.2f} exceeds position size ${notional:.0f} — skipped (no fractional)"
 
             tp_price = round(price * (1 + take_profit_pct / 100), 2)
             sl_price = round(price * (1 - stop_loss_pct / 100), 2)
 
-            # ── Whole shares: bracket order ───────────────────────────────────────
-            if whole_shares >= 1:
-                order = self.trading.submit_order(
-                    MarketOrderRequest(
-                        symbol=symbol,
-                        qty=whole_shares,
-                        side=OrderSide.BUY,
-                        time_in_force=TimeInForce.GTC,
-                        order_class=OrderClass.BRACKET,
-                        take_profit=TakeProfitRequest(limit_price=tp_price),
-                        stop_loss=StopLossRequest(stop_price=sl_price),
-                    )
-                )
-                return {
-                    "id": str(order.id),
-                    "oco_id": None,
-                    "symbol": symbol,
-                    "shares": whole_shares,
-                    "entry_price": price,
-                    "take_profit_price": tp_price,
-                    "stop_loss_price": sl_price,
-                    "fractional": False,
-                    "oco_protected": True,
-                }, None
-
-            # ── Fractional: market buy → poll fill → OCO exit ─────────────────────
-            buy_order = self.trading.submit_order(
+            order = self.trading.submit_order(
                 MarketOrderRequest(
                     symbol=symbol,
-                    qty=frac_shares,
+                    qty=whole_shares,
                     side=OrderSide.BUY,
-                    time_in_force=TimeInForce.DAY,
+                    time_in_force=TimeInForce.GTC,
+                    order_class=OrderClass.BRACKET,
+                    take_profit=TakeProfitRequest(limit_price=tp_price),
+                    stop_loss=StopLossRequest(stop_price=sl_price),
                 )
             )
-            order_id = str(buy_order.id)
-
-            filled_qty, filled_price = self._poll_for_fill(order_id)
-
-            # Timed out — try to cancel to avoid unprotected position
-            if filled_qty is None:
-                try:
-                    self.trading.cancel_order_by_id(order_id)
-                    return None, f"{symbol} order timed out and was cancelled — try again"
-                except Exception:
-                    # Cancel failed: order already filled, fetch fill and place OCO
-                    o = self.trading.get_order_by_id(order_id)
-                    filled_qty = float(o.filled_qty or 0)
-                    filled_price = float(o.filled_avg_price or 0)
-                    if not filled_qty or not filled_price:
-                        return None, f"{symbol} in unknown state — check Alpaca manually"
-
-            # Place OCO with actual fill price
-            tp_price = round(filled_price * (1 + take_profit_pct / 100), 2)
-            sl_price = round(filled_price * (1 - stop_loss_pct / 100), 2)
-            oco_id, oco_error = self._try_oco(symbol, filled_qty, tp_price, sl_price)
-
             return {
-                "id": order_id,
-                "oco_id": oco_id,
+                "id": str(order.id),
+                "oco_id": None,
                 "symbol": symbol,
-                "shares": filled_qty,
-                "entry_price": filled_price,
+                "shares": whole_shares,
+                "entry_price": price,
                 "take_profit_price": tp_price,
                 "stop_loss_price": sl_price,
-                "fractional": True,
-                "oco_protected": oco_id is not None,
-            }, oco_error
+                "fractional": False,
+                "oco_protected": True,
+            }, None
 
         except Exception as e:
             return None, str(e)
