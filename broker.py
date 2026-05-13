@@ -51,7 +51,7 @@ class Broker:
         return None, None
 
     def _try_oco(self, symbol: str, qty: float, tp_price: float, sl_price: float) -> tuple[str | None, str | None]:
-        """Place OCO sell. Primary = limit sell at TP; attached stop sell at SL."""
+        """Place OCO sell. Alpaca requires limit_price + take_profit.limit_price + stop_loss."""
         try:
             oco = self.trading.submit_order(
                 LimitOrderRequest(
@@ -61,6 +61,7 @@ class Broker:
                     time_in_force=TimeInForce.GTC,
                     order_class=OrderClass.OCO,
                     limit_price=tp_price,
+                    take_profit=TakeProfitRequest(limit_price=tp_price),
                     stop_loss=StopLossRequest(stop_price=sl_price),
                 )
             )
