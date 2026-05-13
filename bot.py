@@ -371,7 +371,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if order["oco_protected"]:
                 oco_line = f"\n🛡 OCO set — TP/SL auto-managed  <code>{order['oco_id']}</code>"
             else:
-                oco_line = f"\n⚠️ OCO failed — set TP ${order['take_profit_price']:.2f} / SL ${order['stop_loss_price']:.2f} manually"
+                oco_line = (
+                    f"\n⚠️ OCO failed — set TP ${order['take_profit_price']:.2f} / SL ${order['stop_loss_price']:.2f} manually"
+                    + (f"\n<code>Error: {error}</code>" if error else "")
+                )
 
         base_msg = (
             f"✅ <b>{ticker}</b>: {shares_str} shares @ ~${order['entry_price']:.2f}\n"
@@ -380,8 +383,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"<code>{order['id']}</code>\n"
             f"💰 ${new_remaining:.0f} remaining today"
         )
-        # Only show error if not already covered by oco_line
-        if error and order["oco_protected"]:
+        # Show error only for whole-share orders (fractional error shown in oco_line)
+        if error and not order["fractional"]:
             base_msg += f"\n⚠️ {error}"
 
         await status.edit_text(base_msg, parse_mode="HTML")

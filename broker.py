@@ -1,7 +1,8 @@
+import os
 import time
 
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
+from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest, TakeProfitRequest, StopLossRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockLatestQuoteRequest
@@ -12,7 +13,8 @@ POLL_TIMEOUT  = 60  # max seconds to wait for fill (increased for market-open vo
 
 class Broker:
     def __init__(self, api_key: str, secret_key: str):
-        self.trading = TradingClient(api_key, secret_key, paper=True)
+        paper = os.getenv("ALPACA_PAPER", "true").lower() != "false"
+        self.trading = TradingClient(api_key, secret_key, paper=paper)
         self.data = StockHistoricalDataClient(api_key, secret_key)
 
     def get_account(self) -> dict:
@@ -49,16 +51,16 @@ class Broker:
         return None, None
 
     def _try_oco(self, symbol: str, qty: float, tp_price: float, sl_price: float) -> tuple[str | None, str | None]:
-        """Place OCO sell. Returns (oco_id, error)."""
+        """Place OCO sell. Primary = limit sell at TP; attached stop sell at SL."""
         try:
             oco = self.trading.submit_order(
-                MarketOrderRequest(
+                LimitOrderRequest(
                     symbol=symbol,
                     qty=qty,
                     side=OrderSide.SELL,
                     time_in_force=TimeInForce.GTC,
                     order_class=OrderClass.OCO,
-                    take_profit=TakeProfitRequest(limit_price=tp_price),
+                    limit_price=tp_price,
                     stop_loss=StopLossRequest(stop_price=sl_price),
                 )
             )
