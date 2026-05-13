@@ -25,3 +25,9 @@ def record_spend(notional: float):
     today = date.today().isoformat()
     data[today] = round(data.get(today, 0.0) + notional, 2)
     SPEND_FILE.write_text(json.dumps(data, indent=2))
+
+
+def reset_today():
+    data = _load()
+    data[date.today().isoformat()] = 0.0
+    SPEND_FILE.write_text(json.dumps(data, indent=2))

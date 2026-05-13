@@ -19,7 +19,7 @@ from agent import analyze_morning_data
 from broker import Broker
 from earnings import earnings_warning
 from history import load_history, save_history, add_today, build_context_summary, get_ticker_history, build_history_report
-from spend_tracker import get_remaining, get_today_spent, record_spend, DAILY_LIMIT
+from spend_tracker import get_remaining, get_today_spent, record_spend, reset_today, DAILY_LIMIT
 import config
 
 load_dotenv()
@@ -105,6 +105,13 @@ async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         await update.message.reply_text(f"❌ Error fetching account: {e}")
+
+
+async def cmd_resetbudget(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update.effective_user.id):
+        return
+    reset_today()
+    await update.message.reply_text("✅ Budget reset — $1,000 available today.")
 
 
 async def cmd_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -425,6 +432,7 @@ def main():
     app.add_handler(CommandHandler("budget", cmd_budget))
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("version", cmd_version))
+    app.add_handler(CommandHandler("resetbudget", cmd_resetbudget))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))
