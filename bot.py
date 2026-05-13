@@ -107,6 +107,22 @@ async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error fetching account: {e}")
 
 
+async def cmd_version(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update.effective_user.id):
+        return
+    sha = os.getenv("RAILWAY_GIT_COMMIT_SHA", "unknown")[:7]
+    env = os.getenv("RAILWAY_ENVIRONMENT", "local")
+    paper = os.getenv("ALPACA_PAPER", "true").lower() != "false"
+    mode = "📄 Paper" if paper else "💵 Live"
+    await update.message.reply_text(
+        f"🤖 <b>Bot version</b>\n"
+        f"Commit: <code>{sha}</code>\n"
+        f"Env: {env}\n"
+        f"Alpaca: {mode}",
+        parse_mode="HTML"
+    )
+
+
 async def cmd_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update.effective_user.id):
         return
@@ -408,6 +424,7 @@ def main():
     app.add_handler(CommandHandler("account", cmd_account))
     app.add_handler(CommandHandler("budget", cmd_budget))
     app.add_handler(CommandHandler("history", cmd_history))
+    app.add_handler(CommandHandler("version", cmd_version))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))
