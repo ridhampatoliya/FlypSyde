@@ -502,6 +502,19 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))
+
+    async def post_init(application):
+        await application.bot.set_my_commands([
+            ("start",       "Show welcome message"),
+            ("account",     "Alpaca account summary"),
+            ("budget",      "Today's spend vs daily limit"),
+            ("history",     "Last 5 days trade history"),
+            ("buy",         "Buy 1 share — /buy TICKER [high|medium|low]"),
+            ("resetbudget", "Reset today's budget to full"),
+            ("version",     "Show deployed commit & Alpaca mode"),
+        ])
+
+    app.post_init = post_init
     app.run_polling(drop_pending_updates=True)
 
 
