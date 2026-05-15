@@ -107,6 +107,71 @@ async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error fetching account: {e}")
 
 
+async def cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Usage: /buy TICKER [high|medium|low]  — buys exactly 1 share with bracket order."""
+    if not is_allowed(update.effective_user.id):
+        return
+
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage: /buy TICKER [high|medium|low]\nExample: /buy META high")
+        return
+
+    ticker = args[0].upper()
+    conviction = args[1].lower() if len(args) > 1 and args[1].lower() in ("high", "medium", "low") else "medium"
+
+    tp_pct = config.TAKE_PROFIT_PCT_DEFAULTS.get(conviction, 12.0)
+    sl_pct = config.STOP_LOSS_PCT.get(conviction, 7.0)
+
+    status = await update.message.reply_text(f"⏳ Buying 1 share of {ticker} ({conviction} conviction)...")
+
+    b = Broker(os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY"))
+
+    market_open = await asyncio.get_event_loop().run_in_executor(None, b.is_market_open)
+    if not market_open:
+        await status.edit_text("🔴 Market closed — try during market hours (9:30am–4pm ET).")
+        return
+
+    price = await asyncio.get_event_loop().run_in_executor(None, b.get_current_price, ticker)
+    if price <= 0:
+        await status.edit_text(f"❌ Could not fetch price for {ticker}.")
+        return
+
+    tp_price = round(price * (1 + tp_pct / 100), 2)
+    sl_price = round(price * (1 - sl_pct / 100), 2)
+
+    def place():
+        from alpaca.trading.requests import MarketOrderRequest, TakeProfitRequest, StopLossRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce, OrderClass
+        return b.trading.submit_order(
+            MarketOrderRequest(
+                symbol=ticker,
+                qty=1,
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.GTC,
+                order_class=OrderClass.BRACKET,
+                take_profit=TakeProfitRequest(limit_price=tp_price),
+                stop_loss=StopLossRequest(stop_price=sl_price),
+            )
+        )
+
+    try:
+        order = await asyncio.get_event_loop().run_in_executor(None, place)
+        record_spend(price)
+        remaining = get_remaining()
+        icon = CONVICTION_ICON.get(conviction, "⚡")
+        await status.edit_text(
+            f"✅ <b>{ticker}</b>: 1 share @ ~${price:.2f}  {icon} {conviction}\n"
+            f"TP ${tp_price:.2f}  |  SL ${sl_price:.2f}\n"
+            f"🛡 Bracket order set\n"
+            f"<code>{order.id}</code>\n"
+            f"💰 ${remaining:.0f} remaining today",
+            parse_mode="HTML"
+        )
+    except Exception as e:
+        await status.edit_text(f"❌ Order failed: {e}")
+
+
 async def cmd_resetbudget(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update.effective_user.id):
         return
@@ -433,6 +498,7 @@ def main():
     app.add_handler(CommandHandler("history", cmd_history))
     app.add_handler(CommandHandler("version", cmd_version))
     app.add_handler(CommandHandler("resetbudget", cmd_resetbudget))
+    app.add_handler(CommandHandler("buy", cmd_buy))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app.add_handler(CallbackQueryHandler(handle_callback))
