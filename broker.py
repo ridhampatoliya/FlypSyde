@@ -23,7 +23,11 @@ class Broker:
             "cash": float(acc.cash),
             "portfolio_value": float(acc.portfolio_value),
             "buying_power": float(acc.buying_power),
+            "daytrade_count": int(acc.daytrade_count or 0),
         }
+
+    def get_daytrade_count(self) -> int:
+        return int(self.trading.get_account().daytrade_count or 0)
 
     def is_market_open(self) -> bool:
         return self.trading.get_clock().is_open

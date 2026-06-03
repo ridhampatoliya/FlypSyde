@@ -95,12 +95,19 @@ async def cmd_account(update: Update, context: ContextTypes.DEFAULT_TYPE):
         acc = await asyncio.get_event_loop().run_in_executor(None, b.get_account)
         market_open = await asyncio.get_event_loop().run_in_executor(None, b.is_market_open)
         status = "🟢 Open" if market_open else "🔴 Closed"
+        dt = acc["daytrade_count"]
+        dt_line = f"Day Trades: {dt}/3"
+        if dt >= 3:
+            dt_line += "  🚫 PDT LIMIT REACHED"
+        elif dt == 2:
+            dt_line += "  ⚠️ 1 left"
         await update.message.reply_text(
             f"📊 <b>Alpaca Account</b>\n"
             f"Portfolio: ${acc['portfolio_value']:,.2f}\n"
             f"Cash: ${acc['cash']:,.2f}\n"
             f"Buying Power: ${acc['buying_power']:,.2f}\n"
-            f"Market: {status}",
+            f"Market: {status}\n"
+            f"{dt_line}",
             parse_mode="HTML",
         )
     except Exception as e:
@@ -326,8 +333,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         total = sum(config.POSITION_SIZES.get(t["conviction"], 0) for t in trades)
         spent = get_today_spent()
 
+        # PDT banner
+        try:
+            b_pdt = Broker(os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY"))
+            pdt = await asyncio.get_event_loop().run_in_executor(None, b_pdt.get_daytrade_count)
+        except Exception:
+            pdt = 0
+        pdt_banner = ""
+        if pdt >= 3:
+            pdt_banner = "\n🚫 <b>PDT LIMIT REACHED</b> — 3/3 day trades used. No new trades this week.\n"
+        elif pdt == 2:
+            pdt_banner = "\n⚠️ <b>PDT warning</b> — 2/3 day trades used. 1 remaining.\n"
+
         await query.edit_message_text(
-            f"{icon} <b>Market: {sentiment.upper()}</b>\n{market_ctx}\n\n"
+            f"{icon} <b>Market: {sentiment.upper()}</b>\n{market_ctx}\n"
+            f"{pdt_banner}\n"
             f"💰 Budget: ${spent:.0f} spent · ${remaining:.0f} remaining\n"
             + (f"<b>{len(trades)} trade(s) — ${total:.0f} of ${remaining:.0f}</b>" if trades else "<b>No actionable trades.</b>"),
             parse_mode="HTML",
@@ -433,6 +453,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # PDT check — block at 3 day trades (account < $25k)
+        dt_count = await asyncio.get_event_loop().run_in_executor(None, b.get_daytrade_count)
+        if dt_count >= 3:
+            await context.bot.send_message(
+                chat_id,
+                f"🚫 <b>PDT limit reached</b> — {dt_count}/3 day trades used this week.\n"
+                f"Cannot place new trades until the rolling 5-day window clears.\n"
+                f"Use /account to monitor.",
+                parse_mode="HTML",
+            )
+            return
+
         price = await asyncio.get_event_loop().run_in_executor(None, b.get_current_price, ticker)
         is_fractional = int(notional / price) < 1 if price > 0 else False
         wait_msg = "⏳ Placing fractional order — awaiting fill & OCO setup (up to 60s)..." if is_fractional else "⏳ Placing order..."
@@ -474,6 +506,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Show error only for whole-share orders (fractional error shown in oco_line)
         if error and not order["fractional"]:
             base_msg += f"\n⚠️ {error}"
+
+        if dt_count == 2:
+            base_msg += f"\n⚠️ <b>PDT warning</b>: {dt_count}/3 day trades used — 1 left this week"
 
         await status.edit_text(base_msg, parse_mode="HTML")
 
