@@ -139,6 +139,11 @@ async def cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await status.edit_text("🔴 Market closed — try during market hours (9:30am–4pm ET).")
         return
 
+    open_positions = await asyncio.get_event_loop().run_in_executor(None, b.get_open_positions)
+    if ticker in open_positions:
+        await status.edit_text(f"⏭️ {ticker} skipped — position already open.")
+        return
+
     price = await asyncio.get_event_loop().run_in_executor(None, b.get_current_price, ticker)
     if price <= 0:
         await status.edit_text(f"❌ Could not fetch price for {ticker}.")
@@ -465,9 +470,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
 
+        # Duplicate position check
+        open_positions = await asyncio.get_event_loop().run_in_executor(None, b.get_open_positions)
+        if ticker in open_positions:
+            await context.bot.send_message(
+                chat_id,
+                f"⏭️ <b>{ticker}</b> skipped — position already open.",
+                parse_mode="HTML",
+            )
+            return
+
         price = await asyncio.get_event_loop().run_in_executor(None, b.get_current_price, ticker)
-        is_fractional = int(notional / price) < 1 if price > 0 else False
-        wait_msg = "⏳ Placing fractional order — awaiting fill & OCO setup (up to 60s)..." if is_fractional else "⏳ Placing order..."
+        wait_msg = "⏳ Placing order..."
         status = await context.bot.send_message(chat_id, wait_msg)
 
         try:

@@ -29,6 +29,10 @@ class Broker:
     def get_daytrade_count(self) -> int:
         return int(self.trading.get_account().daytrade_count or 0)
 
+    def get_open_positions(self) -> set[str]:
+        """Returns set of ticker symbols with open positions."""
+        return {p.symbol for p in self.trading.get_all_positions()}
+
     def is_market_open(self) -> bool:
         return self.trading.get_clock().is_open
 
