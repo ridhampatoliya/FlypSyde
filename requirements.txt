@@ -1,5 +1,6 @@
 anthropic>=0.25.0
 alpaca-py>=0.21.0
 python-dotenv>=1.0.0
-python-telegram-bot>=20.0
+python-telegram-bot[job-queue]>=20.0
+pytz>=2024.1
 yfinance>=0.2.0

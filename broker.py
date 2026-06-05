@@ -33,6 +33,10 @@ class Broker:
         """Returns set of ticker symbols with open positions."""
         return {p.symbol for p in self.trading.get_all_positions()}
 
+    def close_position(self, symbol: str):
+        """Cancel all open orders for symbol then market-sell position."""
+        self.trading.close_position(symbol)
+
     def is_market_open(self) -> bool:
         return self.trading.get_clock().is_open
 

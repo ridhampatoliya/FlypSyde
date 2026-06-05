@@ -19,6 +19,8 @@ from agent import analyze_morning_data
 from broker import Broker
 from earnings import earnings_warning
 from history import load_history, save_history, add_today, build_context_summary, get_ticker_history, build_history_report
+from position_tracker import add_position, remove_position
+from exit_monitor import run_exit_checks
 from spend_tracker import get_remaining, get_today_spent, record_spend, reset_today, DAILY_LIMIT
 import config
 
@@ -171,6 +173,7 @@ async def cmd_buy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         order = await asyncio.get_event_loop().run_in_executor(None, place)
         record_spend(price)
         remaining = get_remaining()
+        add_position(ticker, str(order.id), price, conviction, price)
         icon = CONVICTION_ICON.get(conviction, "⚡")
         await status.edit_text(
             f"✅ <b>{ticker}</b>: 1 share @ ~${price:.2f}  {icon} {conviction}\n"
@@ -498,6 +501,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         record_spend(notional)
         new_remaining = get_remaining()
+        add_position(ticker, order["id"], order["entry_price"], conv, notional)
 
         shares_str = f"{order['shares']:.4f}" if order["fractional"] else str(order["shares"])
         oco_line = ""
@@ -562,6 +566,19 @@ def main():
             ("resetbudget", "Reset today's budget to full"),
             ("version",     "Show deployed commit & Alpaca mode"),
         ])
+
+        # Daily exit monitor — 9:35am ET (after market open)
+        chat_id = int(os.getenv("TELEGRAM_USER_ID") or "0")
+        if chat_id:
+            import datetime
+            import pytz
+            et = pytz.timezone("America/New_York")
+            application.job_queue.run_daily(
+                lambda ctx: asyncio.ensure_future(
+                    run_exit_checks(ctx.bot, chat_id)
+                ),
+                time=datetime.time(9, 35, tzinfo=et),
+            )
 
     app.post_init = post_init
     app.run_polling(drop_pending_updates=True)

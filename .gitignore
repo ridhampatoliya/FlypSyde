@@ -14,3 +14,4 @@ Data/
 Stocks/
 daily_spend.json
 rolling_history.json
+positions.json
